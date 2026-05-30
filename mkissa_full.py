@@ -192,7 +192,7 @@ async def gql(client: httpx.AsyncClient, query: str, variables: dict) -> dict:
 
 
 async def gql_persisted_get(client: httpx.AsyncClient, variables: dict, sha: str) -> dict:
-    """Fallback: GET with persisted query hash (bypasses Cloudflare)."""
+    """Fallback: GET with persisted query hash (bypasses Cloudflare). Uses mkissa.to referer."""
     params = {
         "variables": json.dumps(variables, separators=(",", ":")),
         "extensions": json.dumps({"persistedQuery": {"version": 1, "sha256Hash": sha}}, separators=(",", ":")),
@@ -200,7 +200,11 @@ async def gql_persisted_get(client: httpx.AsyncClient, variables: dict, sha: str
     r = await client.get(
         API_URL,
         params=params,
-        headers={"Referer": REFERER, "Origin": ORIGIN, "User-Agent": UA},
+        headers={
+            "Referer": "https://mkissa.to/",
+            "Origin": "https://mkissa.to",
+            "User-Agent": UA,
+        },
         timeout=20,
     )
     r.raise_for_status()
