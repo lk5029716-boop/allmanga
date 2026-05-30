@@ -109,6 +109,68 @@ async def resolve_filemoon(client: httpx.AsyncClient, url: str) -> list:
     return [{"quality": "auto", "url": urls[0], "format": "hls"}] if urls else []
 
 
+async def resolve_allanime_hex(client: httpx.AsyncClient, source_url: str) -> list:
+    """Resolve --hex blob sources by fetching from Allanime's internal API.
+    The hex blob decodes (XOR 0x38) to a path like /apivtwo/clock?id=<id>.
+    We try multiple URL patterns on allanime.day.
+    If server-side resolution fails, return the Allanime embed URL as fallback.
+    """
+    hex_str = source_url.lstrip("-")
+    try:
+        raw_bytes = bytes.fromhex(hex_str)
+    except ValueError:
+        return []
+
+    # XOR 0x38 decode
+    decoded = "".join(chr(b ^ 0x38) for b in raw_bytes)
+
+    # Build .json?id= path (matching Allanime frontend xx() function)
+    path = decoded.replace("?id=", ".json?id=") if "?id=" in decoded else decoded
+
+    # Try fetching from Allanime CDN with multiple patterns
+    urls_to_try = [
+        f"https://allanime.day{path}",
+        f"https://allanime.day{decoded}",
+        f"https://allanime.day/apivtwo/clock.json?id={decoded.split('id=')[1]}" if "id=" in decoded else "",
+    ]
+    urls_to_try = [u for u in urls_to_try if u]
+
+    for url in urls_to_try:
+        try:
+            r = await client.get(url, headers={"User-Agent": UA, "Referer": "https://mkissa.to/"}, timeout=20)
+            if r.status_code != 200:
+                continue
+            text = r.text.strip()
+            # Try plain JSON
+            try:
+                data = json.loads(text)
+                links = data.get("links", [])
+                if links:
+                    return [{"quality": l.get("resolutionStr", l.get("label", "auto")),
+                             "url": l["link"],
+                             "format": "hls" if l["link"].endswith(".m3u8") else "mp4"}
+                            for l in links]
+            except (json.JSONDecodeError, KeyError, TypeError):
+                pass
+            # Try base64 AES-GCM decrypt
+            dec = decrypt_response(text)
+            if dec:
+                links = dec.get("links", [])
+                if links:
+                    return [{"quality": l.get("resolutionStr", l.get("label", "auto")),
+                             "url": l["link"],
+                             "format": "hls" if l["link"].endswith(".m3u8") else "mp4"}
+                            for l in links]
+        except httpx.TimeoutException:
+            continue
+        except Exception:
+            continue
+
+    # Server-side resolution failed. Return empty — these are Allanime internal
+    # tokens that need browser-side resolution via the Allanime embed player.
+    return []
+
+
 async def resolve_one(client: httpx.AsyncClient, src: dict) -> dict:
     name = src.get("sourceName")
     url  = src.get("sourceUrl", "")
@@ -123,10 +185,10 @@ async def resolve_one(client: httpx.AsyncClient, src: dict) -> dict:
             return {**base, "links": await resolve_mp4upload(client, url)}
         if any(d in url for d in ("filemoon", "bysekoze", "kerapoxy", "vidnest")) or name in ("Fm-Hls", "Vn-Hls"):
             return {**base, "links": await resolve_filemoon(client, url)}
-        # --hex blob sources (Default, Luf-Mp4, Uv-mp4): decoded via XOR 0x38 but
-        # the Allanime internal API requires a format we haven't fully reverse-engineered.
-        # These return [] for now — Yt-mp4 + Ok + Mp4 cover most content.
-        return {**base, "links": [], "note": "unresolved_hex_blob"}
+        # --hex blob sources (Default, Luf-Mp4, Uv-mp4)
+        # Decode: XOR each byte with 0x38 to get URL path like /apivtwo/clock?id=<id>
+        # Then fetch from allanime.day and decrypt AES-GCM response
+        return {**base, "links": await resolve_allanime_hex(client, url)}
     except Exception as e:
         return {**base, "links": [], "error": str(e)}
 
@@ -185,7 +247,7 @@ async def sources(showId: str, ep: str, mode: str = "sub"):
         }
 
 @app.get("/proxy")
-async def proxy(url: str, ref: str = "", request: Request | None = None):
+async def proxy(url: str, ref: str = "", request: Request = None):
     """Stream video with proper Referer, bypassing CORS/hotlink protection."""
     h = {"User-Agent": UA}
     if ref:

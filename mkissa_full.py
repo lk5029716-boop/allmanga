@@ -25,6 +25,7 @@ API_URL = "https://api.allanime.day/api"
 REFERER = "https://allanime.to/"
 ORIGIN  = "https://allanime.to"
 UA      = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0 Safari/537.36"
+AES_KEY = hashlib.sha256(b"Xot36i3lK3:v1").digest()
 
 # ─── GraphQL query strings (extracted from mkissa.to SvelteKit JS bundle) ───
 
@@ -160,8 +161,7 @@ def decrypt_b7(blob_b64: str) -> str:
     raw = base64.b64decode(blob_b64)
     assert raw[0] == 1, f"unexpected version {raw[0]}"
     iv, ct = raw[1:13], raw[13:]
-    key = hashlib.sha256(b"Xot36i3lK3:v1").digest()
-    return AESGCM(key).decrypt(iv, ct, None).decode()
+    return AESGCM(AES_KEY).decrypt(iv, ct, None).decode()
 
 
 async def gql(client: httpx.AsyncClient, query: str, variables: dict) -> dict:
@@ -273,42 +273,47 @@ async def resolve_okru(client, url):
 
 
 async def resolve_allanime_internal(client, source_url):
-    """Resolve AllAnime internal (--xxx) source URLs via XOR-0x37 hex decode."""
+    """Resolve AllAnime internal (--hex) source URLs via XOR-0x38 hex decode."""
     sid = source_url.lstrip("-")
-    pairs = {
-        "01": "9", "02": "0", "03": "1", "04": "2", "05": "3", "06": "4", "07": "5", "08": "6", "09": "7", "0a": "8",
-        "0b": ".", "0c": "<", "0d": ">", "0e": "/", "0f": "?", "00": ":", "5c": "/", "79": "H", "7a": "I",
-        "7b": "J", "5b": "L", "53": "M", "0a": "8", "4d": "W", "4f": "Q", "49": "T", "52": "N", "50": "R",
-    }
-    out_chars = []
-    for i in range(0, len(sid), 2):
-        seg = sid[i:i+2]
-        if len(seg) < 2:
-            break
-        ch = pairs.get(seg)
-        if ch is None:
-            val = int(seg, 16) ^ 0x37
-            ch = chr(val) if 32 <= val < 127 else f"[{seg}]"
-        out_chars.append(ch)
-    decoded = "".join(out_chars)
-    path = decoded.replace("clock", "clock.json") if "clock" in decoded else decoded
-    r = await client.get(
-        "https://allanime.day" + path,
-        headers={"Referer": "https://allanime.day/", "User-Agent": UA},
-        timeout=20,
-    )
     try:
-        return [
-            {
-                "quality": link.get("resolutionStr", "auto"),
-                "url": link["link"],
-                "format": "hls" if link["link"].endswith(".m3u8") else "mp4",
-                "referer": "https://allanime.day/",
-            }
-            for link in r.json().get("links", [])
-        ]
-    except Exception:
+        raw_bytes = bytes.fromhex(sid)
+    except ValueError:
         return []
+    decoded = "".join(chr(b ^ 0x38) for b in raw_bytes)
+    path = decoded.replace("?id=", ".json?id=") if "?id=" in decoded else decoded
+
+    urls_to_try = [f"https://allanime.day{path}", f"https://allanime.day{decoded}"]
+    if "id=" in decoded:
+        urls_to_try.append(f"https://allanime.day/apivtwo/clock.json?id={decoded.split('id=')[1]}")
+
+    for url in urls_to_try:
+        try:
+            r = await client.get(url, headers={"Referer": "https://mkissa.to/", "User-Agent": UA}, timeout=20)
+            if r.status_code == 200:
+                text = r.text.strip()
+                try:
+                    data = json.loads(text)
+                    links = data.get("links", [])
+                except (json.JSONDecodeError, TypeError):
+                    links = []
+                if not links:
+                    from cryptography.hazmat.primitives.ciphers.aead import AESGCM as _AESGCM
+                    try:
+                        raw = base64.b64decode(text)
+                        pt = _AESGCM(AES_KEY).decrypt(raw[1:13], raw[13:], None)
+                        data = json.loads(pt.decode())
+                        links = data.get("links", [])
+                    except Exception:
+                        links = []
+                if links:
+                    return [{"quality": l.get("resolutionStr", l.get("label", "auto")),
+                             "url": l["link"],
+                             "format": "hls" if l["link"].endswith(".m3u8") else "mp4",
+                             "referer": "https://allanime.day/"}
+                            for l in links]
+        except Exception:
+            continue
+    return []
 
 
 async def resolve_one(client, src):
