@@ -277,14 +277,19 @@ async def resolve_allanime_internal(client, source_url):
     sid = source_url.lstrip("-")
     pairs = {
         "01": "9", "02": "0", "03": "1", "04": "2", "05": "3", "06": "4", "07": "5", "08": "6", "09": "7", "0a": "8",
-        "0b": ".", "0c": "<", "0d": ">", "0e": "/", "0f": "?", "00": ":", "5c": "/", "79": "H", "7a": "I", "7b": "J",
+        "0b": ".", "0c": "<", "0d": ">", "0e": "/", "0f": "?", "00": ":", "5c": "/", "79": "H", "7a": "I",
+        "7b": "J", "5b": "L", "53": "M", "0a": "8", "4d": "W", "4f": "Q", "49": "T", "52": "N", "50": "R",
     }
     out_chars = []
     for i in range(0, len(sid), 2):
         seg = sid[i:i+2]
         if len(seg) < 2:
             break
-        out_chars.append(pairs.get(seg, chr(int(seg, 16) ^ 0x37)))
+        ch = pairs.get(seg)
+        if ch is None:
+            val = int(seg, 16) ^ 0x37
+            ch = chr(val) if 32 <= val < 127 else f"[{seg}]"
+        out_chars.append(ch)
     decoded = "".join(out_chars)
     path = decoded.replace("clock", "clock.json") if "clock" in decoded else decoded
     r = await client.get(
