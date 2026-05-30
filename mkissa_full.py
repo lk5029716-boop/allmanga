@@ -1,5 +1,5 @@
 """
-mkissa.to / AllAnime real video scraper â€” backend + test frontend in ONE file.
+mkissa.to / AllAnime real video scraper — backend + test frontend in ONE file.
 
 Run:
     pip install fastapi uvicorn httpx cryptography
@@ -9,7 +9,7 @@ Open in browser:
     http://localhost:8000/                 -> test player UI
     http://localhost:8000/search?q=naruto
     http://localhost:8000/sources?showId=<id>&ep=<n>&mode=sub
-    http://localhost:8000/proxy?url=<encoded>&ref=<encoded>   (streams video with proper Referer)
+    http://localhost:8000/proxy?url=<encoded>&ref=<encoded>
 """
 
 import base64, hashlib, html as ihtml, json, re, urllib.parse
@@ -53,7 +53,7 @@ async def gql(client, variables, sha):
 
 
 def deobf_packed(text):
-    pk = re.search(r"\}\s*\(\s*'(.+?)'\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*'([^']*)'\.split", text, re.DOTALL)
+    pk = re.search(r"}\s*\(\s*'(.+?)'\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*'([^']*)'\.split", text, re.DOTALL)
     if not pk: return text
     payload, base, _c, syms = pk.group(1), int(pk.group(2)), int(pk.group(3)), pk.group(4).split("|")
     def repl(m):
@@ -74,7 +74,7 @@ async def http_get(client, url, referer=None):
 async def resolve_mp4upload(client, url):
     text = await http_get(client, url, "https://mp4upload.com/")
     body = deobf_packed(text) + "\n" + text
-    cands = [u for u in re.findall(r'(https?://[^"\'\s\\]+\.mp4[^"\'\s\\]*)', body)
+    cands = [u for u in re.findall(r'(https?://[^\"\'\s\\]+\.mp4[^\"\'\s\\]*)', body)
              if "/d/" in u or "video.mp4" in u]
     return [{"quality":"auto","url":cands[0],"format":"mp4","referer":"https://mp4upload.com/"}] if cands else []
 
@@ -82,7 +82,7 @@ async def resolve_mp4upload(client, url):
 async def resolve_filemoon(client, url):
     text = await http_get(client, url, REF)
     body = deobf_packed(text) + "\n" + text
-    urls = re.findall(r'(https?://[^"\'\s\\]+\.m3u8[^"\'\s\\]*)', body)
+    urls = re.findall(r'(https?://[^\"\'\s\\]+\.m3u8[^\"\'\s\\]*)', body)
     return [{"quality":"auto","url":urls[0],"format":"hls","referer":url}] if urls else []
 
 
@@ -142,7 +142,7 @@ async def resolve_one(client, src):
         return {**base, "links":[], "error":str(e)}
 
 
-app = FastAPI(title="mkissa scraper")
+app = FastAPI(title="AllManga scraper")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 
@@ -181,17 +181,13 @@ async def sources(showId: str, ep: str, mode: str = "sub"):
 
 @app.get("/proxy")
 async def proxy(url: str, ref: str = "", request: Request = None):
-    """Stream video through this server with proper Referer so the browser can play it.
-    Bypasses CORS / hotlink protection. Supports HTTP Range for seeking."""
     headers = {"User-Agent": UA}
     if ref: headers["Referer"] = ref
     rng = request.headers.get("range") if request else None
     if rng: headers["Range"] = rng
-
     client = httpx.AsyncClient(timeout=None, follow_redirects=True)
     req = client.build_request("GET", url, headers=headers)
     upstream = await client.send(req, stream=True)
-
     async def gen():
         try:
             async for chunk in upstream.aiter_raw():
@@ -199,7 +195,6 @@ async def proxy(url: str, ref: str = "", request: Request = None):
         finally:
             await upstream.aclose()
             await client.aclose()
-
     passthrough = {k:v for k,v in upstream.headers.items()
                    if k.lower() in ("content-type","content-length","content-range","accept-ranges","cache-control")}
     passthrough["Access-Control-Allow-Origin"] = "*"
@@ -208,98 +203,158 @@ async def proxy(url: str, ref: str = "", request: Request = None):
     return StreamingResponse(gen(), status_code=upstream.status_code, headers=passthrough)
 
 
+INDEX_HTML = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AllManga — Anime Player</title>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1.5"></script>
+<style>
+:root{--bg:#0a0a0f;--surface:#141420;--surface2:#1c1c2e;--border:#2a2a40;--accent:#7c3aed;--accent-hover:#6d28d9;--green:#22c55e;--red:#ef4444;--text:#e2e2f0;--text-dim:#8888aa}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
+.header{background:var(--surface);border-bottom:1px solid var(--border);padding:12px 20px;display:flex;align-items:center;gap:16px;position:sticky;top:0;z-index:100}
+.header h1{font-size:20px;font-weight:700;background:linear-gradient(135deg,#7c3aed,#a78bfa);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.header .sub{font-size:11px;color:var(--text-dim)}
+.search-row{padding:16px 20px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+input,select{background:var(--surface);border:1px solid var(--border);color:var(--text);padding:10px 14px;border-radius:8px;font-size:14px;outline:none;transition:border-color .2s}
+input:focus{border-color:var(--accent)}input::placeholder{color:var(--text-dim)}
+#q{width:260px}#showId{width:220px}#ep{width:70px}select{cursor:pointer}
+button{background:var(--accent);color:#fff;border:none;padding:10px 18px;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;transition:background .2s,transform .1s}
+button:hover{background:var(--accent-hover)}button:active{transform:scale(.97)}button:disabled{opacity:.5;cursor:not-allowed}
+.main{display:flex;gap:0;max-width:1400px;margin:0 auto;padding:0 20px 40px}
+.player-col{flex:1;min-width:0}
+.video-wrap{position:relative;background:#000;border-radius:12px;overflow:hidden;aspect-ratio:16/9;box-shadow:0 8px 32px rgba(0,0,0,.5)}
+#player{width:100%;height:100%;display:block;object-fit:contain;background:#000}
+.status-bar{margin-top:12px;padding:10px 14px;background:var(--surface);border:1px solid var(--border);border-radius:8px;font-size:13px;color:var(--text-dim);display:flex;align-items:center;gap:8px;min-height:40px}
+.status-dot{width:8px;height:8px;border-radius:50%;background:var(--text-dim);flex-shrink:0}
+.status-dot.loading{background:#f59e0b;animation:pulse 1s infinite}.status-dot.ok{background:var(--green)}.status-dot.err{background:var(--red)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+.servers{margin-top:12px;display:flex;flex-wrap:wrap;gap:8px}
+.srv-btn{background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:8px 14px;border-radius:8px;font-size:13px;cursor:pointer;transition:all .2s;display:flex;align-items:center;gap:6px}
+.srv-btn:hover{border-color:var(--accent);background:var(--surface)}.srv-btn.active{background:var(--accent);border-color:var(--accent);color:#fff}
+.srv-btn .tag{font-size:10px;padding:2px 5px;border-radius:4px;background:rgba(255,255,255,.15);font-weight:600}.srv-btn.active .tag{background:rgba(0,0,0,.25)}
+.srv-btn.unavail{opacity:.4;cursor:not-allowed}.srv-btn.unavail:hover{border-color:var(--border)}
+.sidebar{width:300px;flex-shrink:0;margin-left:20px;display:flex;flex-direction:column;gap:12px}
+.results-panel,.ep-panel{background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden}
+.results-panel h3,.ep-panel h3{padding:12px 14px;font-size:13px;color:var(--text-dim);border-bottom:1px solid var(--border);font-weight:600}
+.result-item{padding:10px 14px;border-bottom:1px solid var(--border);cursor:pointer;transition:background .15s;font-size:13px;display:flex;justify-content:space-between;align-items:center}
+.result-item:hover{background:var(--surface2)}.result-item:last-child{border-bottom:none}
+.result-item .name{font-weight:500}.result-item .id{font-size:11px;color:var(--text-dim);font-family:monospace}
+.ep-list{max-height:300px;overflow-y:auto}
+.ep-item{padding:8px 14px;border-bottom:1px solid var(--border);cursor:pointer;font-size:13px;transition:background .15s;display:flex;align-items:center;gap:8px}
+.ep-item:hover{background:var(--surface2)}.ep-item.active{background:rgba(124,58,237,.15);border-left:3px solid var(--accent)}
+.ep-num{font-weight:600;min-width:28px}.ep-title{color:var(--text-dim);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.raw-toggle{margin-top:12px;background:none;border:1px solid var(--border);color:var(--text-dim);padding:8px 14px;border-radius:8px;font-size:12px;cursor:pointer;width:100%;text-align:left}
+.raw-toggle:hover{color:var(--text);border-color:var(--text-dim)}
+#raw-json{display:none;margin-top:8px;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px;font-size:11px;font-family:'SF Mono','Fira Code',monospace;color:var(--text-dim);max-height:300px;overflow:auto;white-space:pre-wrap;word-break:break-all}
+@media(max-width:900px){.main{flex-direction:column;padding:0 12px 40px}.sidebar{width:100%;margin-left:0;margin-top:16px}#q{width:100%}}
+::-webkit-scrollbar{width:6px}::-webkit-scrollbar-track{background:0 0}::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+</style>
+</head>
+<body>
+<div class="header"><h1>AllManga</h1><div class="sub">Anime streaming — direct video URLs, no iframes</div></div>
+<div class="search-row">
+<input id="q" placeholder="Search anime…" value="iruma">
+<select id="mode"><option>sub</option><option>dub</option></select>
+<button onclick="doSearch()" id="searchBtn">Search</button>
+<span style="flex:1"></span>
+<input id="showId" placeholder="showId" value="6uHjY9KytQFCE4cvJ">
+<input id="ep" placeholder="ep" value="9" type="number" min="1">
+<button onclick="loadSources()" id="srcBtn">▶ Load</button>
+</div>
+<div class="main">
+<div class="player-col">
+<div class="video-wrap"><video id="player" controls playsinline></video></div>
+<div class="status-bar" id="status"><div class="status-dot" id="sdot"></div><span id="stext">Click "Load" to fetch sources and play video</span></div>
+<div class="servers" id="servers"></div>
+<button class="raw-toggle" onclick="toggleRaw()">{ } Raw API Response</button>
+<pre id="raw-json"></pre>
+</div>
+<div class="sidebar">
+<div class="results-panel" id="resultsPanel" style="display:none"><h3>Search Results</h3><div id="results"></div></div>
+<div class="ep-panel" id="epPanel" style="display:none"><h3>Episodes</h3><div class="ep-list" id="epList"></div></div>
+</div>
+</div>
+<script>
+const $=s=>document.getElementById(s),video=$('player');
+let currentHls=null,lastSources=null;
+function setStatus(text,state='idle'){
+  $('stext').textContent=text;
+  $('sdot').className='status-dot '+(state==='loading'?'loading':state==='ok'?'ok':state==='err'?'err':'');
+}
+async function doSearch(){
+  const q=$('q').value.trim();if(!q)return;
+  $('searchBtn').disabled=true;setStatus('Searching…','loading');
+  try{
+    const r=await fetch(`/search?q=${encodeURIComponent(q)}&mode=${$('mode').value}`).then(r=>r.json());
+    const edges=(r.shows&&r.shows.edges)||[];
+    if(!edges.length){setStatus('No results','err');$('resultsPanel').style.display='none'}
+    else{
+      $('resultsPanel').style.display='';
+      $('results').innerHTML=edges.map(s=>`<div class="result-item"onclick="pickShow('${s._id}')"><span class="name">${s.name}</span><span class="id">${s._id}</span></div>`).join('');
+      setStatus(`Found ${edges.length} results`,'ok');
+    }
+  }catch(e){setStatus('Search failed: '+e.message,'err')}
+  $('searchBtn').disabled=false;
+}
+function pickShow(id){$('showId').value=id;loadEpisodes()}
+async function loadEpisodes(){
+  const showId=$('showId').value.trim();if(!showId)return;
+  try{
+    const r=await fetch(`/episodes?showId=${encodeURIComponent(showId)}`).then(r=>r.json());
+    const episodes=r.episode||r.episodes||[];const list=Array.isArray(episodes)?episodes:[];
+    if(list.length){
+      $('epPanel').style.display='';
+      $('epList').innerHTML=list.map((e,i)=>`<div class="ep-item"onclick="pickEp('${e.episodeString||i+1}')"><span class="ep-num">Ep ${e.episodeString||i+1}</span><span class="ep-title">${e.title||''}</span></div>`).join('');
+    }
+  }catch(e){}
+}
+function pickEp(num){$('ep').value=num}
+async function loadSources(){
+  const showId=$('showId').value.trim(),ep=$('ep').value.trim(),mode=$('mode').value;
+  if(!showId||!ep)return setStatus('Enter showId and ep','err');
+  $('srcBtn').disabled=true;setStatus('Fetching real video URLs…','loading');
+  $('servers').innerHTML='';$('raw-json').style.display='none';
+  try{
+    const r=await fetch(`/sources?showId=${encodeURIComponent(showId)}&ep=${encodeURIComponent(ep)}&mode=${mode}`).then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.json()});
+    lastSources=r;const servers=r.servers||[];const buttons=[];
+    for(const srv of servers){
+      if(srv.links&&srv.links.length){
+        for(const l of srv.links){
+          buttons.push(`<button class="srv-btn"onclick='play(${JSON.stringify(l).replace(/'/g,"\\'")})'><span>${srv.server}</span><span class="tag">${l.format.toUpperCase()}</span><span class="tag">${l.quality}</span></button>`);
+        }
+      }else{
+        buttons.push(`<button class="srv-btn unavail"disabled title="${srv.error||srv.note||'unresolved'}"><span>${srv.server}</span><span class="tag">✗</span></button>`);
+      }
+    }
+    $('servers').innerHTML=buttons.join('');
+    $('raw-json').textContent=JSON.stringify(r,null,2);
+    if(r.best){setStatus(`✅ ${servers.filter(s=>s.links&&s.links.length).length}/${servers.length} servers ready`,'ok');play(r.best)}
+    else{setStatus('No direct video URLs found','err')}
+  }catch(e){setStatus('Error: '+e.message,'err');console.error(e)}
+  $('srcBtn').disabled=false;
+}
+function play(link){
+  const src=link.proxy||link.url;
+  document.querySelectorAll('.srv-btn').forEach(b=>b.classList.remove('active'));
+  event.target.closest('.srv-btn')?.classList.add('active');
+  setStatus(`▶ Playing: ${link.server} ${link.quality}`,'ok');
+  if(currentHls){currentHls.destroy();currentHls=null}
+  if(link.format==='hls'&&window.Hls&&Hls.isSupported()){
+    currentHls=new Hls({enableWorker:true,lowLatencyMode:true});
+    currentHls.loadSource(src);currentHls.attachMedia(video);
+    currentHls.on(Hls.Events.MANIFEST_PARSED,()=>video.play().catch(()=>{}));
+    currentHls.on(Hls.Events.ERROR,(ev,data)=>{if(data.fatal){setStatus('HLS error — try another server','err')}});
+  }else{video.src=src;video.play().catch(()=>setStatus('Ready — press play','ok'))}
+}
+function toggleRaw(){const el=$('raw-json');el.style.display=el.style.display==='none'?'block':'none'}
+$('q').addEventListener('keydown',e=>{if(e.key==='Enter')doSearch()});
+</script>
+</body>
+html"""
+
 @app.get("/", response_class=HTMLResponse)
 async def index():
     return INDEX_HTML
-
-
-INDEX_HTML = r"""<!doctype html>
-<html><head><meta charset="utf-8"><title>mkissa scraper â€” test player</title>
-<script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
-<style>
-body{font-family:system-ui,sans-serif;max-width:920px;margin:24px auto;padding:0 16px;background:#111;color:#eee}
-input,button,select{padding:8px;margin:4px 0;font-size:14px;background:#222;color:#eee;border:1px solid #444;border-radius:4px}
-input{width:300px}
-.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-video{width:100%;background:#000;border-radius:6px;margin-top:12px}
-.srv{padding:6px 10px;margin:4px 4px 4px 0;background:#1e3a8a;border:none;color:#fff;border-radius:4px;cursor:pointer;font-size:13px}
-.srv:hover{background:#2563eb}
-.bad{background:#444!important;cursor:not-allowed}
-pre{background:#000;padding:10px;border-radius:6px;font-size:11px;max-height:200px;overflow:auto}
-h2{margin-top:24px}
-a{color:#60a5fa}
-</style></head><body>
-
-<h1>mkissa scraper â€” test player</h1>
-
-<h2>1. Search</h2>
-<div class="row">
-  <input id="q" placeholder="anime name (e.g. iruma)" value="iruma">
-  <select id="mode"><option>sub</option><option>dub</option></select>
-  <button onclick="doSearch()">Search</button>
-</div>
-<div id="results"></div>
-
-<h2>2. Episodes</h2>
-<div class="row">
-  <input id="showId" placeholder="showId" value="6uHjY9KytQFCE4cvJ">
-  <input id="ep" placeholder="ep #" value="9" style="width:80px">
-  <button onclick="loadSources()">Load sources</button>
-</div>
-
-<h2>3. Servers (click to play)</h2>
-<div id="servers"></div>
-
-<video id="player" controls autoplay></video>
-<p id="status"></p>
-
-<h2>Raw API response</h2>
-<pre id="raw"></pre>
-
-<script>
-const $ = id => document.getElementById(id);
-
-async function doSearch() {
-  const q = $('q').value, mode = $('mode').value;
-  const r = await fetch(`/search?q=${encodeURIComponent(q)}&mode=${mode}`).then(r=>r.json());
-  const shows = (r.shows && r.shows.edges) || [];
-  $('results').innerHTML = shows.map(s =>
-    `<div><button class="srv" onclick="$('showId').value='${s._id}';loadSources()">${s.name} (${s._id})</button></div>`
-  ).join('') || '<em>no results</em>';
-}
-
-async function loadSources() {
-  const showId = $('showId').value, ep = $('ep').value, mode = $('mode').value;
-  $('status').textContent = 'Resolving real video URLs...';
-  const r = await fetch(`/sources?showId=${showId}&ep=${ep}&mode=${mode}`).then(r=>r.json());
-  $('raw').textContent = JSON.stringify(r, null, 2);
-  const buttons = [];
-  for (const srv of r.servers || []) {
-    for (const l of srv.links || []) {
-      buttons.push(`<button class="srv" onclick='play(${JSON.stringify(l).replace(/'/g,"&apos;")})'>${srv.server} Â· ${l.quality} Â· ${l.format}</button>`);
-    }
-    if (!srv.links || !srv.links.length)
-      buttons.push(`<button class="srv bad" disabled>${srv.server} Â· (unresolved)</button>`);
-  }
-  $('servers').innerHTML = buttons.join(' ');
-  $('status').textContent = `Found ${buttons.length} direct links. Click a server to play.`;
-}
-
-let hls = null;
-function play(link) {
-  const v = $('player');
-  const src = link.proxy || link.url;
-  $('status').textContent = 'Playing: ' + src;
-  if (hls) { hls.destroy(); hls = null; }
-  if (link.format === 'hls' && window.Hls && Hls.isSupported()) {
-    hls = new Hls();
-    hls.loadSource(src);
-    hls.attachMedia(v);
-  } else {
-    v.src = src;
-  }
-  v.play().catch(e => $('status').textContent = 'Play error: ' + e.message);
-}
-</script>
-</body></html>
-"""
