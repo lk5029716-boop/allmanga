@@ -357,7 +357,7 @@ async def episodes(showId: str):
 @app.get("/sources")
 async def sources(showId: str, ep: str, mode: str = "sub"):
     EPISODE_SHA = "d405d0edd690624b66baba3068e0edc3ac90f1597d898a1ec8db4e5c43c00fec"
-    async with httpx.AsyncClient() as c:
+    async with httpx.AsyncClient(timeout=60) as c:
         # Try POST first, fall back to persisted GET on captcha
         try:
             data = await gql(c, QUERY_EPISODE, {
@@ -367,14 +367,14 @@ async def sources(showId: str, ep: str, mode: str = "sub"):
             data = await gql_persisted_get(c, {
                 "showId": showId, "translationType": mode, "episodeString": ep,
             }, EPISODE_SHA)
-    episode_data = data.get("episode") or {}
-    srcs = episode_data.get("sourceUrls", [])
-    if not srcs:
-        raise HTTPException(404, "no sources found for this episode")
+        episode_data = data.get("episode") or {}
+        srcs = episode_data.get("sourceUrls", [])
+        if not srcs:
+            raise HTTPException(404, "no sources found for this episode")
 
-    resolved = []
-    for s in sorted(srcs, key=lambda x: x.get("priority", 0), reverse=True):
-        resolved.append(await resolve_one(c, s))
+        resolved = []
+        for s in sorted(srcs, key=lambda x: x.get("priority", 0), reverse=True):
+            resolved.append(await resolve_one(c, s))
 
     direct = [link for r in resolved for link in r.get("links", [])]
     for r in resolved:
