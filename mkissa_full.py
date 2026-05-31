@@ -88,7 +88,13 @@ def decrypt_response(text):
 # ── Server resolvers ──
 
 async def resolve_player(s):
-    return [{"quality": "auto", "url": s["sourceUrl"], "format": s.get("fileExtenstion", "mp4")}]
+    url = s["sourceUrl"]
+    # Determine the proper referer based on the CDN domain
+    ref = "https://allanime.day/"
+    if "mp4upload" in url: ref = "https://mp4upload.com/"
+    elif "fast4speed" in url: ref = "https://allanime.day/"
+    elif "vkuser" in url or "ok.ru" in url: ref = "https://ok.ru/"
+    return [{"quality": "auto", "url": url, "format": s.get("fileExtenstion", "mp4"), "referer": ref}]
 
 async def resolve_okru(client, url):
     text = await http_get(client, url)
@@ -252,8 +258,16 @@ async def sources(showId: str, ep: str, mode: str = "sub"):
 
 @app.get("/proxy")
 async def proxy(url: str, ref: str = "", request: Request = None):
-    headers = {"User-Agent": UA}
+    headers = {"User-Agent": UA, "Accept": "*/*", "Accept-Encoding": "identity",
+               "Accept-Language": "en-US,en;q=0.9", "Connection": "keep-alive"}
     if ref: headers["Referer"] = ref
+    # Also try to mimic the Origin from the ref domain
+    try:
+        from urllib.parse import urlparse
+        parsed = urlparse(ref)
+        if parsed.scheme and parsed.netloc:
+            headers["Origin"] = f"{parsed.scheme}://{parsed.netloc}"
+    except: pass
     rng = request.headers.get("range") if request else None
     if rng: headers["Range"] = rng
     cli = httpx.AsyncClient(timeout=None, follow_redirects=True)
@@ -263,8 +277,10 @@ async def proxy(url: str, ref: str = "", request: Request = None):
             async for chunk in up.aiter_raw(): yield chunk
         finally:
             await up.aclose(); await cli.aclose()
-    pt = {k: v for k, v in up.headers.items() if k.lower() in ("content-type","content-length","content-range","accept-ranges")}
+    pt = {k: v for k, v in up.headers.items()
+          if k.lower() in ("content-type","content-length","content-range","accept-ranges","etag","last-modified","cache-control")}
     pt["Access-Control-Allow-Origin"] = "*"
+    pt["Access-Control-Allow-Headers"] = "*"
     if "content-type" not in {k.lower() for k in pt}: pt["Content-Type"] = "video/mp4"
     return StreamingResponse(gen(), status_code=up.status_code, headers=pt)
 
