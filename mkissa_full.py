@@ -361,31 +361,33 @@ function playEp(ep,mode){$('ep').value=ep;$('md').value=mode;loadSrc()}
 async function loadSrc(){
   const id=$('sid').value.trim(),ep=$('ep').value.trim(),md=$('md').value;
   if(!id||!ep)return;
-  st('Loading sources...','ld');$('srv').innerHTML='';$('raw').style.display='none';
+  st('Loading sources...','ld');$('srv').innerHTML='';_hls=null;
   try{const d=await(await fetch(`/sources?showId=${encodeURIComponent(id)}&ep=${encodeURIComponent(ep)}&mode=${md}`)).json();
   _srv=d.servers||[];$('raw').textContent=JSON.stringify(d,null,2);
   if(!_srv.length){st('No sources','er');return}
   $('srv').innerHTML=_srv.map((s,i)=>{
     const hl=(s.links||[]).length>0,ifr=s.links&&s.links[0]&&s.links[0].format==='iframe';
-    return `<button class="srvb ${!hl&&!ifr?'off':''}" onclick="play(${i})"><span>${s.server}</span><span class="tg">${s.type||''}</span>`+
+    return `<button class="srvb ${!hl&&!ifr?'off':''}" data-idx="${i}" onclick="play(${i})"><span>${s.server}</span><span class="tg">${s.type||''}</span>`+
            (hl?`<span class="tg" style="background:rgba(34,197,94,.2)">${s.links.length}</span>`:``)+
            (ifr?`<span class="tg" style="background:rgba(245,158,11,.2)">EMB</span>`:``)+`</button>`}).join('');
   const f=_srv.findIndex(s=>(s.links||[]).length>0);if(f>=0)play(f);
   st(`${_srv.length} servers`,'ok')}catch(e){st('Error: '+e,'er')}}
+let _hls=null;
 function play(idx){
   document.querySelectorAll('.srvb').forEach(b=>b.classList.remove('ac'));
+  const btn=document.querySelector(`.srvb[data-idx="${idx}"]`);if(btn)btn.classList.add('ac');
   const srv=_srv[idx];if(!srv)return;
-  ($('srv').children[idx]||{}).classList.add('active');
-  const link=srv.links[0];$('raw').style.display='none';
+  const link=srv.links[0];
   if(link.format==='iframe'){
     document.querySelector('.vw').innerHTML=`<iframe src="${link.url}" style="width:100%;height:100%;border:none" allowfullscreen allow="autoplay;encrypted-media"></iframe>`;
     st(`${srv.server} (embedded)`,'ok');return}
+  if(_hls){_hls.destroy();_hls=null;}
   const w=document.querySelector('.vw');if(!w.querySelector('video'))w.innerHTML='<video id="ply" controls playsinline style="width:100%;height:100%;display:block;object-fit:contain;background:#000"></video>';
   const v=$('ply'),u=link.proxy||link.url,hls=u.endsWith('.m3u8')||link.format==='hls';
   st(`Loading ${srv.server}...`,'ld');
-  if(hls&&H.isSupported()){const h=new H;h.loadSource(u);h.attachMedia(v);
-    h.on(H.Events.MANIFEST_PARSED,()=>{v.play();st(srv.server+' (HLS)','ok')});
-    h.on(H.Events.ERROR,(e,d)=>{if(d.fatal)HlsError()})}
+  if(hls&&Hls.isSupported()){_hls=new Hls;_hls.loadSource(u);_hls.attachMedia(v);
+    _hls.on(Hls.Events.MANIFEST_PARSED,()=>{v.play().catch(()=>{});st(srv.server+' (HLS)','ok')});
+    _hls.on(Hls.Events.ERROR,(e,d)=>{if(d.fatal){st('HLS error','er');_hls.destroy();_hls=null}})}
   else if(hls&&v.canPlayType('application/vnd.apple.mpegurl')){v.src=u;v.play().catch(()=>{});st(srv.server+' (HLS native)','ok')}
   else{v.src=u;v.load();v.play().catch(()=>{});st(srv.server+' ('+link.format+')','ok')}}
 </script></body></html>"""
